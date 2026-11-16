@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tuner</title>
+<style>
+:root{--bg:#13262b;--panel:#1b363c;--line:#2d5057;--text:#e9f1ee;--mute:#93aeb0;--warn:#f2b84b;--ok:#7be3a4}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font:16px/1.4 "Avenir Next","Segoe UI",system-ui,sans-serif;display:flex;justify-content:center;min-height:100vh;padding:max(16px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom))}
+main{width:100%;max-width:440px;display:flex;flex-direction:column;gap:20px}
+h1{font-size:1.1rem;font-weight:600;margin:0;color:var(--mute)}
+.tabs{display:flex;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:5px}
+.tabs button{flex:1;font:inherit;font-weight:600;border:0;border-radius:10px;padding:10px;background:transparent;color:var(--mute);cursor:pointer}
+.tabs button[aria-selected=true]{background:var(--bg);color:var(--text);box-shadow:inset 0 0 0 1px var(--line)}
+.gauge{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:16px 12px 20px;text-align:center}
+svg{width:100%;height:auto;display:block}
+.tick{stroke:var(--line);stroke-width:2}
+.tick.major{stroke:var(--mute);stroke-width:3}
+.zone{fill:none;stroke:var(--ok);stroke-width:10;opacity:.35}
+#needle{stroke:var(--mute);stroke-width:4;stroke-linecap:round}
+.hub{fill:var(--mute)}
+.tuned #needle{stroke:var(--ok)} .tuned .hub{fill:var(--ok)}
+.off #needle{stroke:var(--warn)} .off .hub{fill:var(--warn)}
+#note{font-size:5.5rem;font-weight:700;line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums;margin-top:-8px;min-height:1em}
+#note small{font-size:1.6rem;font-weight:500;color:var(--mute);letter-spacing:0}
+.tuned #note{color:var(--ok)} .off #note{color:var(--warn)}
+#status{font-size:1.1rem;margin-top:6px;min-height:1.4em}
+#hz{color:var(--mute);font-variant-numeric:tabular-nums;min-height:1.4em}
+.strings{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+.strings button{flex:1 1 0;min-width:52px;padding:12px 0;border-radius:12px;border:2px solid var(--line);background:var(--panel);color:var(--text);font:inherit;font-weight:600;cursor:pointer}
+.strings button.hit{border-color:var(--warn)}
+.strings button.hit.in{border-color:var(--ok);background:#1f4a45}
+.strings button[aria-pressed=true]{outline:3px solid var(--text);outline-offset:2px}
+.hint{color:var(--mute);font-size:.9rem;text-align:center;margin:-8px 0 0;min-height:1.3em}
+.row{display:flex;gap:12px;align-items:end}
+label{display:flex;flex-direction:column;gap:4px;font-size:.9rem;color:var(--mute);flex:1}
+select,input{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%}
+#start{font:inherit;font-weight:700;border:0;border-radius:14px;padding:16px;background:var(--ok);color:#0c2a22;cursor:pointer}
+#start.on{background:var(--panel);color:var(--text);border:1px solid var(--line)}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-offset:2px}
+#msg{color:var(--warn);min-height:1.3em;font-size:.95rem}
+</style>
+</head>
+<body>
+<main>
+  <h1>Tuner</h1>
+  <div class="tabs" role="tablist" aria-label="Instrument">
+    <button role="tab" id="tab-guitar" aria-selected="true" data-inst="guitar">Guitar</button>
+    <button role="tab" id="tab-ukulele" aria-selected="false" data-inst="ukulele">Ukulele</button>
+  </div>
+
+  <section class="gauge idle" id="gauge" aria-label="Tuning gauge">
+    <svg viewBox="0 0 300 175" aria-hidden="true">
+      <g id="ticks"></g>
+      <path class="zone" id="zone"/>
+      <g id="needleG"><line id="needle" x1="150" y1="150" x2="150" y2="48"/></g>
+      <circle class="hub" cx="150" cy="150" r="8"/>
+    </svg>
+    <div id="note">–</div>
+    <div id="status">Press Start, then play a string</div>
+    <div id="hz"></div>
+  </section>
+
+  <div class="strings" id="strings"></div>
+  <p class="hint" id="hint"></p>
+
+  <div class="row">
+    <label>Tuning
+      <select id="tuning"></select>
+    </label>
+    <label>A4 reference (Hz)
+      <input id="a4" type="number" min="415" max="466" step="1" value="440" inputmode="numeric">
+    </label>
+  </div>
+
+  <button id="start">Start tuning</button>
+  <div id="msg" role="status"></div>
+</main>
+
+<script>
+const NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const INSTR={
+  guitar:{
+    'Standard (E A D G B E)':[40,45,50,55,59,64],
+    'Drop D':[38,45,50,55,59,64],
+    'Half step down':[39,44,49,54,58,63],
+    'DADGAD':[38,45,50,55,57,62],
+    'Open G':[38,43,50,55,59,62],
+    'Open D':[38,45,50,54,57,62],
+    'Chromatic (any note)':[]
+  },
+  ukulele:{
+    'Standard (G C E A)':[67,60,64,69],
+    'Low G (G C E A)':[55,60,64,69],
+    'Baritone (D G B E)':[50,55,59,64],
+    'D tuning (A D F# B)':[69,62,66,71],
+    'Chromatic (any note)':[]
+  }
+};
+let inst='guitar', TUNINGS=INSTR.guitar;
+let A4=440, tuning=Object.keys(TUNINGS)[0], lock=-1, running=false;
+let ctx, analyser, stream, buf, lastRun=0, lastHeard=0, recent=[];
+let needleDeg=0, targetDeg=0;
+const $=id=>document.getElementById(id);
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const mf=m=>A4*Math.pow(2,(m-69)/12);
+const nm=m=>NAMES[m%12], oct=m=>Math.floor(m/12)-1;
+
+// gauge ticks: ±50 cents maps to ±60°
+(function(){
+  const NS='http://www.w3.org/2000/svg', g=$('ticks');
+  const pt=(deg,r)=>{const a=(deg-90)*Math.PI/180;return [150+r*Math.cos(a),150+r*Math.sin(a)]};
+  for(let c=-50;c<=50;c+=10){
+    const major=c%50===0||c===0, [x1,y1]=pt(c*1.2,major?122:128), [x2,y2]=pt(c*1.2,138);
+    const l=document.createElementNS(NS,'line');
+    l.setAttribute('x1',x1);l.setAttribute('y1',y1);l.setAttribute('x2',x2);l.setAttribute('y2',y2);
+    l.setAttribute('class','tick'+(major?' major':''));g.appendChild(l);
+  }
+  const [ax,ay]=pt(-6,112),[bx,by]=pt(6,112);
+  $('zone').setAttribute('d',`M${ax} ${ay} A112 112 0 0 1 ${bx} ${by}`);
+})();
+
+function fillTunings(){
+  const sel=$('tuning');sel.innerHTML='';
+  Object.keys(TUNINGS).forEach(k=>{const o=document.createElement('option');o.textContent=k;sel.appendChild(o)});
+  tuning=sel.value=Object.keys(TUNINGS)[0];
+}
+function buildTuning(){
+  const sel=$('tuning');
+  fillTunings();
+  sel.onchange=()=>{tuning=sel.value;lock=-1;renderStrings();idle()};
+  $('a4').onchange=e=>{let v=parseInt(e.target.value,10);if(!(v>=415&&v<=466))v=440;A4=v;e.target.value=v;renderStrings()};
+  document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+    inst=b.dataset.inst;TUNINGS=INSTR[inst];lock=-1;
+    document.querySelectorAll('.tabs button').forEach(x=>x.setAttribute('aria-selected',x===b));
+    fillTunings();renderStrings();idle();
+  });
+}
+function renderStrings(){
+  const box=$('strings');box.innerHTML='';
+  const t=TUNINGS[tuning];
+  t.forEach((m,i)=>{
+    const b=document.createElement('button');
+    b.textContent=nm(m);b.dataset.i=i;
+    b.setAttribute('aria-pressed',lock===i);
+    b.setAttribute('aria-label','String '+(t.length-i)+', '+nm(m)+oct(m));
+    b.onclick=()=>{lock=lock===i?-1:i;renderStrings()};
+    box.appendChild(b);
+  });
+  $('hint').textContent=t.length?(lock>=0?'Locked to one string. Tap it again for auto-detect.':'Auto-detects the string. Tap one to lock it.'):'';
+}
+
+// YIN pitch detection
+function yin(x,sr){
+  const W=2048,maxTau=Math.min(1100,x.length-W),minTau=Math.max(2,Math.floor(sr/1000));
+  const d=new Float32Array(maxTau);
+  for(let t=1;t<maxTau;t++){let s=0;for(let i=0;i<W;i++){const v=x[i]-x[i+t];s+=v*v}d[t]=s}
+  let run=0;d[0]=1;
+  for(let t=1;t<maxTau;t++){run+=d[t];d[t]=run?d[t]*t/run:1}
+  let tau=-1;
+  for(let t=minTau;t<maxTau-1;t++){
+    if(d[t]<0.12){while(t+1<maxTau-1&&d[t+1]<d[t])t++;tau=t;break}
+  }
+  if(tau<1)return -1;
+  const a=d[tau-1],b=d[tau],c=d[tau+1],den=a-2*b+c;
+  return ctx.sampleRate/(tau+(den?0.5*(a-c)/den:0));
+}
+
+function show(f){
+  const t=TUNINGS[tuning];let target;
+  if(t.length&&lock>=0)target=t[lock];
+  else if(t.length){let best=1e9;t.forEach(m=>{const e=Math.abs(1200*Math.log2(f/mf(m)));if(e<best){best=e;target=m}})}
+  else target=Math.round(69+12*Math.log2(f/A4));
+  const cents=1200*Math.log2(f/mf(target));
+  const c=Math.max(-50,Math.min(50,cents)), inTune=Math.abs(cents)<=5;
+  targetDeg=c*1.2;
+  $('gauge').className='gauge '+(inTune?'tuned':'off');
+  $('note').innerHTML=nm(target)+'<small>'+oct(target)+'</small>';
+  $('status').textContent=inTune?'In tune':(cents<0?'Too low. Tighten the string':'Too high. Loosen the string');
+  $('hz').textContent=f.toFixed(1)+' Hz  ·  '+(cents>0?'+':'')+cents.toFixed(0)+' cents';
+  document.querySelectorAll('#strings button').forEach(b=>{
+    const on=t[+b.dataset.i]===target;
+    b.classList.toggle('hit',on);b.classList.toggle('in',on&&inTune);
+  });
+}
+function idle(){
+  targetDeg=0;recent=[];
+  $('gauge').className='gauge idle';
+  $('note').textContent='–';
+  $('status').textContent=running?'Play a string':'Press Start, then play a string';
+  $('hz').textContent='';
+  document.querySelectorAll('#strings button').forEach(b=>b.classList.remove('hit','in'));
+}
+
+function loop(ts){
+  if(!running)return;
+  requestAnimationFrame(loop);
+  needleDeg=reduce?targetDeg:needleDeg+(targetDeg-needleDeg)*0.2;
+  $('needleG').setAttribute('transform','rotate('+needleDeg.toFixed(2)+' 150 150)');
+  if(ts-lastRun<60)return;
+  lastRun=ts;
+  analyser.getFloatTimeDomainData(buf);
+  let s=0;for(let i=0;i<buf.length;i++)s+=buf[i]*buf[i];
+  const rms=Math.sqrt(s/buf.length);
+  let f=rms>0.008?yin(buf,ctx.sampleRate):-1;
+  if(f>0){
+    recent.push(f);if(recent.length>5)recent.shift();
+    const m=[...recent].sort((a,b)=>a-b)[recent.length>>1];
+    lastHeard=ts;show(m);
+  }else if(ts-lastHeard>700&&$('note').textContent!=='–')idle();
+}
+
+async function start(){
+  $('msg').textContent='';
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    $('msg').textContent='Microphone access isn’t available here. Open this file in Chrome, Edge, Firefox or Safari.';return;
+  }
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  }catch(e){
+    $('msg').textContent=e.name==='NotAllowedError'
+      ?'Microphone blocked. Allow it in the browser’s site settings, then press Start again.'
+      :'Couldn’t open a microphone. Check that one is connected.';
+    return;
+  }
+  ctx=new (window.AudioContext||window.webkitAudioContext)();
+  await ctx.resume();
+  analyser=ctx.createAnalyser();analyser.fftSize=4096;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+  buf=new Float32Array(analyser.fftSize);
+  running=true;$('start').textContent='Stop';$('start').classList.add('on');
+  idle();requestAnimationFrame(loop);
+}
+function stop(){
+  running=false;
+  stream&&stream.getTracks().forEach(t=>t.stop());
+  ctx&&ctx.close();
+  $('start').textContent='Start tuning';$('start').classList.remove('on');
+  idle();needleDeg=0;$('needleG').setAttribute('transform','rotate(0 150 150)');
+}
+$('start').onclick=()=>running?stop():start();
+buildTuning();renderStrings();
+</script>
+</body>
+</html>
